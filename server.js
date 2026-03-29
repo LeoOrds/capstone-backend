@@ -10,14 +10,16 @@ app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-// --- DATABASE CONNECTION ---
+// *************--- DATABASE CONNECTION ---************ //
 // const db = mysql.createConnection({
 //     host: "localhost",
 //     user: "root",
 //     password: "", // Add your password if you have one in XAMPP
 //     database: "capstone"
 // });
-// --- CLOUD DATABASE CONNECTION (AIVEN) ---
+
+
+//************ */ --- CLOUD DATABASE CONNECTION (AIVEN) --- *************//
 const db = mysql.createConnection({
     host: "ordonio-victorordo27-82de.b.aivencloud.com",       // Paste your Aiven Host
     port: 11793,         // Paste your Aiven Port (no quotes around the number)
@@ -28,6 +30,8 @@ const db = mysql.createConnection({
         rejectUnauthorized: false       // Aiven requires SSL, this allows the connection
     }
 });
+
+
 
 db.connect(err => {
     if (err) {
@@ -182,21 +186,53 @@ app.post('/api/faculties/import', upload.single('file'), (req, res) => {
         const sheetName = workbook.SheetNames[0];
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
+        // THE CHOPPER ENGINE: Converts Excel string into JSON array
+        const parseSchedule = (scheduleStr) => {
+            if (!scheduleStr) return '[]'; // If blank in Excel, return empty array
+            
+            try {
+                // 1. Split by semicolon for multiple classes
+                const sessions = String(scheduleStr).split(';').map(s => s.trim()).filter(s => s);
+                
+                // 2. Split by pipe for class details
+                const parsedSchedule = sessions.map(session => {
+                    const parts = session.split('|').map(p => p.trim());
+                    // Make sure they actually typed all 4 parts!
+                    if (parts.length >= 4) {
+                        return {
+                            day: parts[0],
+                            time: parts[1],
+                            building: parts[2],
+                            room: parts[3]
+                        };
+                    }
+                    return null;
+                }).filter(s => s !== null); // Remove any broken entries
+                
+                return JSON.stringify(parsedSchedule);
+            } catch (err) {
+                return '[]'; // Fallback just in case they typed gibberish
+            }
+        };
+
         const values = data.map(row => [
             row.FirstName || row.first_name || '',
             row.LastName || row.last_name || '',
             row.Department || row.department || '',
-            '[]',
+            parseSchedule(row.Schedule || row.schedule || ''), // <--- WE CHANGED THIS LINE!
             'Active'
         ]);
+        
         if (values.length === 0) return res.json({ success: true, message: "No data found in Excel" });
 
         const sql = "INSERT INTO faculties (first_name, last_name, department, weekly_schedule, status) VALUES ?";
         db.query(sql, [values], (err, result) => {
-            if (err) return res.status(500).json({ error: "Database error" });
-            res.json({ success: true, message: `Successfully imported ${result.affectedRows} faculties!` });
+            if (err) return res.status(500).json({ error: "Database error: " + err.message });
+            res.json({ success: true, message: `Successfully imported ${result.affectedRows} faculties with schedules!` });
         });
-    } catch (error) { res.status(500).json({ error: "Failed to parse Excel file" }); }
+    } catch (error) { 
+        res.status(500).json({ error: "Failed to parse Excel file" }); 
+    }
 });
 
 // ==========================================
