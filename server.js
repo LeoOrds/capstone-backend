@@ -11,25 +11,25 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
 // *************--- DATABASE CONNECTION ---************ //
-const db = mysql.createConnection({
-    host: "localhost",
-    user: "root",
-    password: "", // Add your password if you have one in XAMPP
-    database: "capstone"
-});
+// const db = mysql.createConnection({
+//     host: "localhost",
+//     user: "root",
+//     password: "", // Add your password if you have one in XAMPP
+//     database: "capstone"
+// });
 
 
 //************ */ --- CLOUD DATABASE CONNECTION (AIVEN) --- *************//
-// const db = mysql.createConnection({
-//     host: "ordonio-victorordo27-82de.b.aivencloud.com",       // Paste your Aiven Host
-//     port: 11793,         // Paste your Aiven Port (no quotes around the number)
-//     user: "avnadmin",                   // Paste your Aiven User
-//     password: process.env.DB_PASSWORD,    // Paste your Aiven Password
-//     database: "defaultdb",              // Aiven uses 'defaultdb' by default
-//     ssl: {
-//         rejectUnauthorized: false       // Aiven requires SSL, this allows the connection
-//     }
-// });
+const db = mysql.createConnection({
+    host: "ordonio-victorordo27-82de.b.aivencloud.com",       // Paste your Aiven Host
+    port: 11793,         // Paste your Aiven Port (no quotes around the number)
+    user: "avnadmin",                   // Paste your Aiven User
+    password: process.env.DB_PASSWORD,    // Paste your Aiven Password
+    database: "defaultdb",              // Aiven uses 'defaultdb' by default
+    ssl: {
+        rejectUnauthorized: false       // Aiven requires SSL, this allows the connection
+    }
+});
 
 
 
