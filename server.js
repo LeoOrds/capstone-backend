@@ -11,25 +11,25 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
 // *************--- DATABASE CONNECTION ---************ //
-// const db = mysql.createConnection({
-//     host: "localhost",
-//     user: "root",
-//     password: "", // Add your password if you have one in XAMPP
-//     database: "capstone"
-// });
+const db = mysql.createConnection({
+    host: "localhost",
+    user: "root",
+    password: "", // Add your password if you have one in XAMPP
+    database: "capstone"
+});
 
 
 //************ */ --- CLOUD DATABASE CONNECTION (AIVEN) --- *************//
-const db = mysql.createConnection({
-    host: "ordonio-victorordo27-82de.b.aivencloud.com",       // Paste your Aiven Host
-    port: 11793,         // Paste your Aiven Port (no quotes around the number)
-    user: "avnadmin",                   // Paste your Aiven User
-    password: process.env.DB_PASSWORD,    // Paste your Aiven Password
-    database: "defaultdb",              // Aiven uses 'defaultdb' by default
-    ssl: {
-        rejectUnauthorized: false       // Aiven requires SSL, this allows the connection
-    }
-});
+// const db = mysql.createConnection({
+//     host: "ordonio-victorordo27-82de.b.aivencloud.com",       // Paste your Aiven Host
+//     port: 11793,         // Paste your Aiven Port (no quotes around the number)
+//     user: "avnadmin",                   // Paste your Aiven User
+//     password: process.env.DB_PASSWORD,    // Paste your Aiven Password
+//     database: "defaultdb",              // Aiven uses 'defaultdb' by default
+//     ssl: {
+//         rejectUnauthorized: false       // Aiven requires SSL, this allows the connection
+//     }
+// });
 
 
 
@@ -188,16 +188,11 @@ app.post('/api/faculties/import', upload.single('file'), (req, res) => {
 
         // THE CHOPPER ENGINE: Converts Excel string into JSON array
         const parseSchedule = (scheduleStr) => {
-            if (!scheduleStr) return '[]'; // If blank in Excel, return empty array
-            
+            if (!scheduleStr) return '[]'; 
             try {
-                // 1. Split by semicolon for multiple classes
                 const sessions = String(scheduleStr).split(';').map(s => s.trim()).filter(s => s);
-                
-                // 2. Split by pipe for class details
                 const parsedSchedule = sessions.map(session => {
                     const parts = session.split('|').map(p => p.trim());
-                    // Make sure they actually typed all 4 parts!
                     if (parts.length >= 4) {
                         return {
                             day: parts[0],
@@ -207,11 +202,10 @@ app.post('/api/faculties/import', upload.single('file'), (req, res) => {
                         };
                     }
                     return null;
-                }).filter(s => s !== null); // Remove any broken entries
-                
+                }).filter(s => s !== null); 
                 return JSON.stringify(parsedSchedule);
             } catch (err) {
-                return '[]'; // Fallback just in case they typed gibberish
+                return '[]'; 
             }
         };
 
@@ -219,16 +213,81 @@ app.post('/api/faculties/import', upload.single('file'), (req, res) => {
             row.FirstName || row.first_name || '',
             row.LastName || row.last_name || '',
             row.Department || row.department || '',
-            parseSchedule(row.Schedule || row.schedule || ''), // <--- WE CHANGED THIS LINE!
+            parseSchedule(row.Schedule || row.schedule || ''), 
             'Active'
         ]);
         
         if (values.length === 0) return res.json({ success: true, message: "No data found in Excel" });
 
-        const sql = "INSERT INTO faculties (first_name, last_name, department, weekly_schedule, status) VALUES ?";
-        db.query(sql, [values], (err, result) => {
+        // --- NEW CLASH DETECTOR ENGINE ---
+        db.query("SELECT first_name, last_name, weekly_schedule FROM faculties", (err, existingData) => {
             if (err) return res.status(500).json({ error: "Database error: " + err.message });
-            res.json({ success: true, message: `Successfully imported ${result.affectedRows} faculties with schedules!` });
+
+            let clashes = [];
+            
+            // Format existing DB data for easy checking
+            const allExisting = existingData.map(f => ({
+                name: `${f.first_name} ${f.last_name}`.toLowerCase().trim(),
+                schedule: f.weekly_schedule ? JSON.parse(f.weekly_schedule) : []
+            }));
+
+            // Format new CSV data for easy checking
+            const parsedNewSchedules = data.map(row => ({
+                name: `${row.FirstName || row.first_name || ''} ${row.LastName || row.last_name || ''}`.toLowerCase().trim(),
+                rawName: `${row.FirstName || row.first_name || ''} ${row.LastName || row.last_name || ''}`,
+                schedule: JSON.parse(parseSchedule(row.Schedule || row.schedule || ''))
+            }));
+
+            // Scan every new person against the DB AND against other people in the CSV
+            parsedNewSchedules.forEach(newFac => {
+                let hasClash = false;
+
+                newFac.schedule.forEach(newSlot => {
+                    // 1. Check against the existing Database
+                    allExisting.forEach(exFac => {
+                        if (exFac.name === newFac.name) return; // Skip themselves if they are already in DB
+                        exFac.schedule.forEach(exSlot => {
+                            if (
+                                String(exSlot.building).trim().toLowerCase() === String(newSlot.building).trim().toLowerCase() &&
+                                String(exSlot.room).trim().toLowerCase() === String(newSlot.room).trim().toLowerCase() &&
+                                String(exSlot.day).trim().toLowerCase() === String(newSlot.day).trim().toLowerCase() &&
+                                String(exSlot.time).trim().toLowerCase() === String(newSlot.time).trim().toLowerCase()
+                            ) { hasClash = true; }
+                        });
+                    });
+
+                    // 2. Check against other NEW rows in the CSV
+                    parsedNewSchedules.forEach(otherNewFac => {
+                        if (newFac.name === otherNewFac.name) return; // Skip themselves
+                        otherNewFac.schedule.forEach(otherSlot => {
+                            if (
+                                String(otherSlot.building).trim().toLowerCase() === String(newSlot.building).trim().toLowerCase() &&
+                                String(otherSlot.room).trim().toLowerCase() === String(newSlot.room).trim().toLowerCase() &&
+                                String(otherSlot.day).trim().toLowerCase() === String(newSlot.day).trim().toLowerCase() &&
+                                String(otherSlot.time).trim().toLowerCase() === String(newSlot.time).trim().toLowerCase()
+                            ) { hasClash = true; }
+                        });
+                    });
+                });
+
+                if (hasClash) clashes.push(newFac.rawName); // Save their name to the alert list!
+            });
+
+            // Remove any duplicate names from the alert list
+            clashes = [...new Set(clashes)];
+
+            // Insert into the database regardless of clashes
+            const sql = "INSERT INTO faculties (first_name, last_name, department, weekly_schedule, status) VALUES ?";
+            db.query(sql, [values], (err, result) => {
+                if (err) return res.status(500).json({ error: "Database error: " + err.message });
+                
+                // Return success BUT include the clashes list for the frontend to show
+                res.json({ 
+                    success: true, 
+                    message: `Successfully imported ${result.affectedRows} faculties.`,
+                    clashes: clashes
+                });
+            });
         });
     } catch (error) { 
         res.status(500).json({ error: "Failed to parse Excel file" }); 
@@ -239,11 +298,17 @@ app.post('/api/faculties/import', upload.single('file'), (req, res) => {
 // REPORTS ROUTES (Restored!)
 // ==========================================
 app.post('/api/reports/submit', (req, res) => {
-    const { checker_name, building, schedule_time, report_date, records } = req.body;
+    // BUG FIX 1: We added 'draft_key' to the incoming request body
+    const { checker_name, building, schedule_time, report_date, draft_key, records } = req.body;
     const sql = "INSERT INTO attendance_reports (checker_name, building, schedule_time, report_date, records) VALUES (?, ?, ?, ?, ?)";
 
     db.query(sql, [checker_name, building, schedule_time, report_date, JSON.stringify(records)], (err, result) => {
         if (err) return res.status(500).json({ success: false, error: err.message });
+
+        // BUG FIX 2: Automatically delete the cloud draft once the final report is submitted!
+        if (draft_key) {
+            db.query("DELETE FROM drafts WHERE checker_name = ? AND report_date = ?", [checker_name, draft_key]);
+        }
 
         db.query("INSERT INTO activity_logs (user, action, role) VALUES (?, ?, ?)", [checker_name, `Submitted report for ${building}`, 'Checker']);
         res.json({ success: true, message: "Report successfully submitted!" });
@@ -255,6 +320,54 @@ app.get('/api/reports', (req, res) => {
         if (err) return res.status(500).json({ error: "Database error" });
         res.json(data);
     });
+});
+
+// --- NEW ROUTE: SAVE A DRAFT ---
+app.post('/api/drafts/save', async (req, res) => {
+  const { checker_name, report_date, records } = req.body;
+  
+  try {
+    const checkSql = "SELECT id FROM drafts WHERE checker_name = ? AND report_date = ?";
+    db.query(checkSql, [checker_name, report_date], (err, results) => {
+      if (err) throw err;
+
+      if (results.length > 0) {
+        const updateSql = "UPDATE drafts SET records = ? WHERE id = ?";
+        db.query(updateSql, [JSON.stringify(records), results[0].id], (err) => {
+          if (err) throw err;
+          res.json({ success: true, message: "Draft updated successfully." });
+        });
+      } else {
+        const insertSql = "INSERT INTO drafts (checker_name, report_date, records) VALUES (?, ?, ?)";
+        db.query(insertSql, [checker_name, report_date, JSON.stringify(records)], (err) => {
+          if (err) throw err;
+          res.json({ success: true, message: "Draft saved successfully." });
+        });
+      }
+    });
+  } catch (error) {
+    console.error("Error saving draft:", error);
+    res.status(500).json({ success: false, message: "Database error." });
+  }
+});
+
+// --- NEW ROUTE: GET A DRAFT ---
+app.get('/api/drafts/:checker_name/:date', (req, res) => {
+  const { checker_name, date } = req.params;
+  const sql = "SELECT records FROM drafts WHERE checker_name = ? AND report_date = ?";
+  
+  db.query(sql, [checker_name, date], (err, results) => {
+    if (err) {
+      console.error("Error fetching draft:", err);
+      return res.status(500).json({ success: false, message: "Database error." });
+    }
+    
+    if (results.length > 0) {
+      res.json({ success: true, draft: JSON.parse(results[0].records) });
+    } else {
+      res.json({ success: true, draft: {} }); 
+    }
+  });
 });
 
 // --- SERVER START ---
